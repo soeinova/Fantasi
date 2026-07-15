@@ -87,6 +87,22 @@ SECTIONS {
         _edata = .;
     } >RAM1 AT> FLASH
 
+.tdata : {
+        . = ALIGN(4);
+        __tdata_start = .;
+        *(.tdata .tdata.*)
+        . = ALIGN(4);
+        __tdata_end = .;
+    } >RAM AT> FLASH
+
+    .tbss (NOLOAD) : {
+        . = ALIGN(4);
+        __tbss_start = .;
+        *(.tbss .tbss.*)
+        . = ALIGN(4);
+        __tbss_end = .;
+    } >RAM
+
     _eflash = LOADADDR(.data) + SIZEOF(.data);
 
     .bss : {
