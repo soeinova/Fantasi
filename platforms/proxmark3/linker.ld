@@ -84,23 +84,6 @@ SECTIONS {
         . = ALIGN(4);
     } >ram AT>osimage :data
 
-.tdata : {
-        . = ALIGN(4);
-        __tdata_start = .;
-        *(.tdata .tdata.*)
-        . = ALIGN(4);
-        __tdata_end = .;
-    } >RAM AT> FLASH
-
-    .tbss (NOLOAD) : {
-        . = ALIGN(4);
-        __tbss_start = .;
-        *(.tbss .tbss.*)
-        . = ALIGN(4);
-        __tbss_end = .;
-    } >RAM
-
-
     _eflash = LOADADDR(.data) + SIZEOF(.data);
     __data_src_start__ = LOADADDR(.data);
     __data_start__     = ADDR(.data);
@@ -119,6 +102,18 @@ SECTIONS {
         PROVIDE(_end = .);
     } >ram AT>ram :bss
 
+    /* Collect the picolibc TLS template (errno, rand state, localtime buffer)
+     * into one explicitly-defined section so the ASSERT below can size it on any
+     * toolchain: a bare SIZEOF(.tdata) errors out when a picolibc build emits no
+     * .tdata. (INFO) keeps it out of the loadable image (no PT_LOAD / phdr); we
+     * don't use the template at runtime anyway - TLS lives in core/libc_glue.c's
+     * fantasi_tls_block via our own __aeabi_read_tp - this exists only to be
+     * sized. */
+    .tls_sizecheck (INFO) : {
+        *(.tdata .tdata.*)
+        *(.tbss .tbss.*)
+    }
+
     /* Stack grows down from _stack_end; heap grows up from __heap_start__. */
     ._user_heap (NOLOAD) : {
         . = ALIGN(8);
@@ -134,8 +129,9 @@ SECTIONS {
     /DISCARD/ : { *(.ARM.attributes) *(.comment) *(.note.GNU-stack) }
 }
 
-/* The picolibc TLS segment (errno, rand state, localtime buffer) must fit in
- * core/libc_glue.c's fantasi_tls_block[128] minus the 8-byte ARM EABI TCB. Fail
- * the build if a new TLS consumer outgrows it instead of corrupting .bss. */
-ASSERT(SIZEOF(.tdata) + SIZEOF(.tbss) <= 120,
-       "picolibc TLS segment exceeds fantasi_tls_block (core/libc_glue.c)")
+/* The picolibc TLS template must fit in core/libc_glue.c's fantasi_tls_block[128]
+ * minus the 8-byte ARM EABI TCB. Fail the build if a new TLS consumer outgrows it
+ * instead of overrunning the block at runtime. .tls_sizecheck is always defined
+ * (above), so SIZEOF resolves even when the toolchain emits no .tdata/.tbss. */
+ASSERT(SIZEOF(.tls_sizecheck) <= 120,
+       "picolibc TLS exceeds fantasi_tls_block (core/libc_glue.c)")
