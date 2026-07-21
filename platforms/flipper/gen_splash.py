@@ -33,7 +33,7 @@ def _read_png(path):
         # chunk data
         idat = b''
         palette = None
-        width = height = bitdepth = colortype = interface = None
+        width = height = bitdepth = colortype = interlace = None
 
         # chunks
         while idx < len(data):
@@ -41,7 +41,7 @@ def _read_png(path):
             chunk_type = data[idx + 4:idx + 8]
             chunk_data = data[idx + 8:idx + 8 + length]
             idx += 12 + length
-            
+
             # parse chunk type/data
             if chunk_type == b'IHDR':
                 width, height, bitdepth, colortype, _, _, interlace = struct.unpack('>IIBBBBB', chunk_data)
@@ -58,49 +58,56 @@ def _read_png(path):
             raise ValueError(f"only 1-bit and 8-bit PNGs are supported (got {bitdepth}-bit)")
 
         raw = zlib.decompress(idat)
-        channels = {0: 1, 2: 3, 3: 1, 4: 2, 6: 4}[colortype]
 
-        # pbytes per row
-        if bitdepth == 8:
-            stride = width * channels
+        if colortype:
+            channels = {0: 1, 2: 3, 3: 1, 4: 2, 6: 4}[colortype]
         else:
-            stride = (width * channels + 7) // 8
+            raise ValueError("cannot determine colortype")
 
-        unfiltered = bytearray(height * stride)
-        prev_row = bytearray(stride)
-        src_pos = 0
-        for y in range(height):
-            filter_type = raw[src_pos]
-            src_pos += 1
-            row = bytearray(raw[src_pos:src_pos + stride])
-            src_pos += stride
- 
-            bpp = max(1, channels * bitdepth // 8)
-            for x in range(len(row)):
-                a = row[x - bpp] if x >= bpp else 0
-                b = prev_row[x]
-                c = prev_row[x - bpp] if x >= bpp else 0
- 
-                if filter_type == 0:
-                    pass
-                elif filter_type == 1:
-                    row[x] = (row[x] + a) & 0xFF
-                elif filter_type == 2:
-                    row[x] = (row[x] + b) & 0xFF
-                elif filter_type == 3:
-                    row[x] = (row[x] + (a + b) // 2) & 0xFF
-                elif filter_type == 4:
-                    p = a + b - c
-                    pa, pb, pc = abs(p - a), abs(p - b), abs(p - c)
-                    pr = a if pa <= pb and pa <= pc else (b if pb <= pc else c)
-                    row[x] = (row[x] + pr) & 0xFF
-                else:
-                    raise ValueError(f"unknown filter type {filter_type}")
- 
-            unfiltered[y * stride:(y + 1) * stride] = row
-            prev_row = row
- 
-        return width, height, bitdepth, colortype, unfiltered, palette
+        # bytes per row
+        if width and height:
+            if bitdepth == 8:
+                stride = width * channels
+            else:
+                stride = (width * channels + 7) // 8
+
+            unfiltered = bytearray(height * stride)
+            prev_row = bytearray(stride)
+            src_pos = 0
+            for y in range(height):
+                filter_type = raw[src_pos]
+                src_pos += 1
+                row = bytearray(raw[src_pos:src_pos + stride])
+                src_pos += stride
+
+                bpp = max(1, channels * bitdepth // 8)
+                for x in range(len(row)):
+                    a = row[x - bpp] if x >= bpp else 0
+                    b = prev_row[x]
+                    c = prev_row[x - bpp] if x >= bpp else 0
+
+                    if filter_type == 0:
+                        pass
+                    elif filter_type == 1:
+                        row[x] = (row[x] + a) & 0xFF
+                    elif filter_type == 2:
+                        row[x] = (row[x] + b) & 0xFF
+                    elif filter_type == 3:
+                        row[x] = (row[x] + (a + b) // 2) & 0xFF
+                    elif filter_type == 4:
+                        p = a + b - c
+                        pa, pb, pc = abs(p - a), abs(p - b), abs(p - c)
+                        pr = a if pa <= pb and pa <= pc else (b if pb <= pc else c)
+                        row[x] = (row[x] + pr) & 0xFF
+                    else:
+                        raise ValueError(f"unknown filter type {filter_type}")
+
+                unfiltered[y * stride:(y + 1) * stride] = row
+                prev_row = row
+
+            return width, height, bitdepth, colortype, unfiltered, palette
+        else:
+            raise ValueError("IDAT chunk missing")
 
 
 def _to_bilevel(width, height, bitdepth, colortype, pixels, palette):
@@ -108,7 +115,7 @@ def _to_bilevel(width, height, bitdepth, colortype, pixels, palette):
     Returns a flat bytearray of one value per pixel: 0x00 or 0xFF
     """
     out = bytearray(width * height)
- 
+
     if bitdepth == 1:
         stride = (width + 7) // 8
         for y in range(height):
@@ -124,13 +131,13 @@ def _to_bilevel(width, height, bitdepth, colortype, pixels, palette):
                 else:
                     out[y * width + x] = 255 if bit else 0
         return out
- 
+
     # bitdepth == 8
     channels = {0: 1, 2: 3, 3: 1, 4: 2, 6: 4}[colortype]
     stride = width * channels
     if colortype == 3 and palette is None:
         raise ValueError("palette PNG missing PLTE chunk")
- 
+
     for i in range(width * height):
         base = i * channels
         if colortype == 3:
@@ -139,14 +146,14 @@ def _to_bilevel(width, height, bitdepth, colortype, pixels, palette):
         else:
             v = pixels[base]
         out[i] = 255 if v >= 128 else 0
- 
+
     return out
- 
- 
+
+
 def png_to_st7565(path):
     width, height, bitdepth, colortype, pixels, palette = _read_png(path)
     bw = _to_bilevel(width, height, bitdepth, colortype, pixels, palette)
- 
+
     buf = bytearray(DISPLAY_PAGES * DISPLAY_WIDTH)
     for page in range(DISPLAY_PAGES):
         for col in range(DISPLAY_WIDTH):
@@ -157,8 +164,8 @@ def png_to_st7565(path):
                     byte |= 1 << bit
             buf[page * DISPLAY_WIDTH + col] = byte
     return bytes(buf)
- 
- 
+
+
 def main():
     if len(sys.argv) != 3:
         print(f"usage: {sys.argv[0]} <input.png> <output.bin>", file=sys.stderr)
@@ -167,7 +174,7 @@ def main():
     with open(sys.argv[2], "wb") as f:
         f.write(splash)
     print(f"{sys.argv[2]}: {len(splash)} bytes (1bpp ST7565 page format)")
- 
- 
+
+
 if __name__ == "__main__":
     main()
